@@ -3,15 +3,18 @@ import os
 import aiosqlite
 import tempfile
 import json
+import asyncio
 
-# Use temporary directory for cloud writability
+# Configuration for cloud writability
 TEMP_DIR = tempfile.gettempdir()
 DB_PATH = os.path.join(TEMP_DIR, "expenses.db")
+# Assumes categories.json is in the same folder on GitHub
 CATEGORIES_PATH = os.path.join(os.path.dirname(__file__), "categories.json")
 
 mcp = FastMCP("ExpenseTracker")
 
 async def init_db():
+    """Initializes the database in a writable temporary directory."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("PRAGMA journal_mode=WAL")
@@ -25,18 +28,11 @@ async def init_db():
                     note TEXT DEFAULT ''
                 )
             """)
-            # Test write access
-            await db.execute("INSERT OR IGNORE INTO expenses(date, amount, category) VALUES ('2000-01-01', 0, 'test')")
-            await db.execute("DELETE FROM expenses WHERE category = 'test'")
             await db.commit()
-            print("Database initialized successfully (Async)")
+            print(f"Database initialized at: {DB_PATH}")
     except Exception as e:
         print(f"Database initialization error: {e}")
         raise
-
-# FastMCP handles the async initialization if we call it before running
-import asyncio
-asyncio.run(init_db())
 
 @mcp.tool()
 async def add_expense(date: str, amount: float, category: str, subcategory: str = "", note: str = ""):
@@ -55,7 +51,7 @@ async def add_expense(date: str, amount: float, category: str, subcategory: str 
 
 @mcp.tool()
 async def list_expenses(start_date: str, end_date: str):
-    """List expense entries within an inclusive date range."""
+    """List expense entries within an inclusive date range (YYYY-MM-DD)."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
@@ -71,7 +67,7 @@ async def list_expenses(start_date: str, end_date: str):
         return {"status": "error", "message": f"Error listing expenses: {str(e)}"}
 
 @mcp.tool()
-async def summarize(start_date: str, end_date: str, category: None):
+async def summarize(start_date: str, end_date: str, category:None):
     """Summarize expenses by category within an inclusive date range."""
     try:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -95,14 +91,19 @@ async def summarize(start_date: str, end_date: str, category: None):
 
 @mcp.resource("expense://categories", mime_type="application/json")
 async def categories():
-    """Provide valid expense categories."""
+    """Provide valid expense categories from categories.json."""
     try:
-        # standard open() is blocking, but for a small JSON file it's usually fine.
-        # For strict async, you could use aiofiles.
         with open(CATEGORIES_PATH, "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
-        return json.dumps({"categories": ["Food", "Transport", "Utilities", "Other"]}, indent=2)
+        # Fallback if file is missing
+        return json.dumps({
+            "categories": ["Food & Dining", "Transportation", "Shopping", "Entertainment", "Other"]
+        }, indent=2)
 
-if __name__ == "__main__":   
+if __name__ == "__main__":
+    # Initialize the database only when running locally or as the main process
+    asyncio.run(init_db())
+    # Start the MCP server
     mcp.run(transport="http", host="0.0.0.0", port=8000)
+
